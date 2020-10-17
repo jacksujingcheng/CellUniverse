@@ -12,7 +12,7 @@ import cProfile
 import argparse
 import multiprocessing
 from pathlib import Path
-from optimization import auto_temp_schedule, auto_temp_schedule_frame, auto_temp_schedule_factor, auto_temp_schedule_const
+from optimization import auto_temp_schedule, auto_temp_schedule_frame, auto_temp_schedule_factor, auto_temp_schedule_const, find_optimal_simulation_conf, load_image
 
 
 def parse_args():
@@ -41,9 +41,11 @@ def parse_args():
 
     parser.add_argument('--no_parallel', action='store_true', default=False, help='disable parallelism')
     parser.add_argument('--global_optimization', action='store_true', default=False, help='global optimization')
-    parser.add_argument('--graysynthetic', type=bool, default=False,
+    parser.add_argument('--binary', action='store_true', default=True,
+                        help = "input image is binary")
+    parser.add_argument('--graySynthetic', action='store_true', default=False,
                         help='enables the use of the grayscale synthetic image for use with non-thresholded images')
-    parser.add_argument('--phaseContractImage', type=bool, default=False,
+    parser.add_argument('--phaseContrast', action='store_true', default=False,
                         help='enables the use of the grayscale synthetic image for phase contract images')
     parser.add_argument('-ta', '--auto_temp', metavar='TEMP', type=int, default=1,
                           help='auto temperature scheduling for the simulated annealing')
@@ -51,6 +53,8 @@ def parse_args():
     parser.add_argument('-te', '--end_temp', type=float, help='ending temperature for the simulated annealing')
     parser.add_argument('-am', '--auto_meth', type=str, default='none', choices=('none', 'frame', 'factor', 'const'),
                         help='method for auto-temperature scheduling')
+    parser.add_argument('-r', "--residual", metavar="FILE", type=Path, required=False,
+                          help="path to the residual image output directory")
 
     # required arguments
 
@@ -63,6 +67,9 @@ def parse_args():
                           help='path to the configuration file')
     required.add_argument('-x', '--initial', metavar='FILE', type=Path, required=True,
                           help='path to the initial cell configuration')
+    required.add_argument('-b', "--bestfit", metavar="FILE", type=Path, required=True,
+                          help="path to the best fit synthetic image output directory")
+    
 
 
     parsed = parser.parse_args()
@@ -116,7 +123,11 @@ def load_colony(colony, initial_file, config):
                 width = float(row['width'])
                 length = float(row['length'])
                 rotation = float(row['rotation'])
-                cell = Bacilli(name, x, y, width, length, rotation)
+                if config["simulation"]["image.type"] == "graySynthetic":
+                    opacity = config["simulation"]["cell.opacity"]
+                    cell = Bacilli(name, x, y, width, length, rotation, opacity = opacity)
+                else:
+                    cell = Bacilli(name, x, y, width, length, rotation)
             colony.add(CellNode(cell))
 
 
@@ -167,10 +178,23 @@ def main(args):
     start = time.time()
 
     try:
+        config = load_config(args.config)
+        
+        simulation_config = config["simulation"]
+        #Maybe better to store the image type in the config file in the first place, instead of using cmd?
+        if args.graySynthetic == True:
+            simulation_config["image.type"] = "graySynthetic"
+        elif args.phaseContrast == True:
+            simulation_config["image.type"] = "phaseContrastImage"
+        elif args.binary == True:
+            simulation_config["image.type"] = "binary"
+        else:
+            raise ValueError("Invalid Command: Synthetic image type must be specified")
+            
         if args.debug:
             debugmode = True
 
-        config = load_config(args.config)
+        
         celltype = config['global.cellType'].lower()
 
         # setup the colony from a file with the initial properties
@@ -185,8 +209,16 @@ def main(args):
             header.extend(['x', 'y', 'width', 'length', 'rotation'])
         print(','.join(header), file=lineagefile)
 
+        #optimze configuration
+        config["simulation"] = find_optimal_simulation_conf(config["simulation"], load_image(get_inputfiles(args)[0]), list(colony))
         if args.global_optimization:
             import global_optimization
+            if args.auto_temp == 1:
+                print("auto temperature schedule started")
+                args.start_temp, args.end_temp = \
+                    global_optimization.auto_temp_schedule(get_inputfiles(args), lineageframes, lineagefile, args, config)
+                print("auto temperature schedule finished")
+                print("starting temperature is ", args.start_temp, "ending temperature is ", args.end_temp)
             global_optimization.optimize(get_inputfiles(args), lineageframes, lineagefile, args, config)
             return 0
 
@@ -225,13 +257,14 @@ def main(args):
                     print("starting temperature is ", args.start_temp, "ending temperature is ", args.end_temp)
                     prev_cell_num = len(colony)
 
+
             colony = optimize(imagefile, lineageframes, args, config, client)
 
             # flatten modifications and save cell properties
             colony.flatten()
             for cellnode in colony:
                 properties = [imagefile.name, cellnode.cell.name]
-                if celltype == 'bacilli':
+                if celltype == 'bacilli':                                   
                     properties.extend([
                         str(cellnode.cell.x),
                         str(cellnode.cell.y),
@@ -265,7 +298,7 @@ if __name__ == '__main__':
     from cell import Bacilli
     from colony import CellNode, Colony, LineageFrames
     from optimization import optimize
-
+    from sys import exit
     # pr = cProfile.Profile()
     # pr.enable()
     print('CHECKPOINT, {}, {}, {}'.format(time.time(), -1, -1), flush=True)
