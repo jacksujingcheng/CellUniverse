@@ -1,8 +1,7 @@
-#!/bin/bash
 die() { echo "$@" >&2; exit 1;
 }
 
-echo "Testing graysynthetic image"
+echo "Testing simulated annealing global optimization"
 
 [ -d "$REG_DIR" ] || die "Must run from the repository's root directory!"
 
@@ -17,12 +16,15 @@ if python3 "./main.py" \
     --frame_first 0 \
     --frame_last 13 \
     --debug "./debug" \
-    --input "./input_gray/frame%03d.png" \
-    --graySynthetic \
+    --input "./input/frame%03d.png" \
     --output "$REG_DIR/output" \
     --bestfit "$REG_DIR/bestfit" \
     --config "./config.json" \
-    --initial "./cells.0.csv" ; then
+    --initial "./cells.0.csv" \
+    --start_temp 0.459 \
+    --end_temp 4.59e-8 \
+    --auto_temp 0 \
+    --no_parallel --global_optimization --graySynthetic; then
     :
 else
     die "Python quit unexpectedly!"
@@ -30,4 +32,4 @@ fi
 
 python3 "$REG_DIR/compare.py" "$REG_DIR/expected_lineage.csv" "$REG_DIR/output/lineage.csv" || die "compare failed"
 
-echo "Done testing simulated annealing."
+echo "Done testing simulated annealing global optimization."
